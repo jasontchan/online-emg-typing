@@ -177,25 +177,25 @@ def run_inference(num_iter=400):
         )
 
     for i, (chunk,) in enumerate(stream_iterator, start=1):
-        print(f"Processing chunk {i}...", flush=True)
-        print(f"Chunk shape: {len(chunk)}", flush=True)
-        print(f"Chunk: {chunk}", flush=True)
+        # print(f"Processing chunk {i}...", flush=True)
+        # print(f"Chunk shape: {len(chunk)}", flush=True)
+        # print(f"Chunk: {chunk}", flush=True)
         segment = cacher(np.expand_dims(np.array(chunk), axis=0)) #shape (T, C) where C is both hands channel count
         #resample segment
         segment = torch.tensor(interpolate_segment_halves(segment), dtype=torch.float32) #shape (T, 2*C) 2*C should be 32
-        print(f"segment length {segment.shape}", flush=True)
-        print(f"segment {segment}", flush=True) 
+        # print(f"segment length {segment.shape}", flush=True)
+        # print(f"segment {segment}", flush=True) 
         #process chunk and convert to spectrogram
         segment = log_spec(segment)
-        print(f"segment after log spec {segment.shape}", flush=True)
+        # print(f"segment after log spec {segment.shape}", flush=True)
         T, total_channels, freq_bins = segment.shape
         segment = segment.reshape(T, nBands, nChannels, freq_bins)
         segment = segment.unsqueeze(1) #add batch dimension N=1 for online inference
-        print(f"segment after reshape {segment.shape}", flush=True)
+        # print(f"segment after reshape {segment.shape}", flush=True)
 
         logits = model(segment)  # shape (T, C, V) where V is vocab size
         logits = logits.squeeze(1)
-        print(f"logits shape {logits.shape}", flush=True)
+        # print(f"logits shape {logits.shape}", flush=True)
 
         window_duration = window_length / sample_rate
         first_timestamp = time.time() - window_duration
@@ -204,22 +204,6 @@ def run_inference(num_iter=400):
         hypothesis = decoder.decode(logits, timestamps=timestamps)  # shape (T, C, V) -> (T, C) -> (C,)
         print(f"Hypothesis: {hypothesis}", flush=True)
 
-        # features, length = feature_extractor(segment)
-        # hypos, state = decoder.infer(features, length, 10, state=state, hypothesis=hypothesis)
-        
-
-        '''
-        process the chunk by converting to spectrogram
-        pass it through emg2qwerty model
-        get the hypothesis
-        process the token, print the character
-        '''
-        # hypothesis = hypos
-        # transcript = token_processor(hypos[0][0], lstrip=False)
-        # print(transcript, end="\r", flush=True)
-
-        # chunks.append(chunk)
-        # feats.append(features)
         if i == num_iter:
             break
 
@@ -230,7 +214,7 @@ if __name__ == "__main__":
     # Start the recording of EMG data
     start_recording()
     # Run inference
-    run_inference(400)
+    run_inference(12000)
     
     # Clean up processes
     p_l.join()
