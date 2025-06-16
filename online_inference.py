@@ -193,14 +193,14 @@ def run_inference(num_iter=400):
         segment = segment.unsqueeze(1) #add batch dimension N=1 for online inference
         print(f"segment after reshape {segment.shape}", flush=True)
 
-        window_duration = window_length / sample_rate
-        first_timestamp = time.time() - window_duration
-        timestamps = first_timestamp + np.arange(T) / target_rate
-
-
         logits = model(segment)  # shape (T, C, V) where V is vocab size
         logits = logits.squeeze(1)
         print(f"logits shape {logits.shape}", flush=True)
+
+        window_duration = window_length / sample_rate
+        first_timestamp = time.time() - window_duration
+        timestamps = first_timestamp + np.arange(logits.shape[0]) / target_rate
+
         hypothesis = decoder.decode(logits, timestamps=timestamps)  # shape (T, C, V) -> (T, C) -> (C,)
         print(f"Hypothesis: {hypothesis}", flush=True)
 
