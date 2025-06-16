@@ -12,7 +12,7 @@ import numpy as np
 import math
 import torch
 import torchaudio
-
+import torch.nn.functional as F
 
 TTransformIn = TypeVar("TTransformIn")
 TTransformOut = TypeVar("TTransformOut")
@@ -212,6 +212,7 @@ class NewLogSpectrogram:
     n_fft: int = 64
     hop_length: int = 16
     sample_rate: int = 200  # Critical addition for frequency calculations
+    target_rate: int = 200
 
     def __post_init__(self) -> None:
         self.spectrogram = torchaudio.transforms.Spectrogram(
@@ -264,7 +265,30 @@ class NewLogSpectrogram:
                                 self.aggregation_matrix)
         
         # Restore original dimensions
-        return aggregated.view(orig_shape[:-1] + (6,))  # (T, ..., C, 6)
+        out = aggregated.view(orig_shape[:-1] + (6,))  # (T, ..., C, 6)
+
+        # For low Hz data, broadcast strongest low-frequency band to upper bins at each time stamp
+        # second_band = out[..., 1:2] 
+        # out[..., 2:] = second_band.expand_as(out[..., 2:])
+
+        # Optional downsampling
+        if self.target_rate != self.sample_rate:
+            ratio = self.target_rate / self.sample_rate 
+            T_old = out.shape[0]
+            T_new = int(T_old * ratio)
+      
+            rest = out.shape[1:]
+            out = out.view(T_old, -1).permute(1, 0).unsqueeze(1).unsqueeze(3)
+            out = F.interpolate(
+                out,
+                size=(T_new, 1),
+                mode='bilinear',
+                align_corners=False
+            )
+            out = out.squeeze(3).squeeze(1).permute(1, 0)
+            # back into (T_new, …, C, 6)
+            out = out.view((T_new,) + rest)
+        return out
 
     
 @dataclass

@@ -43,7 +43,7 @@ class ContextCacher:
         self.window_length = window_length
         self.curr_window = np.zeros((window_length, 16), dtype=np.float32)
 
-    def __call__(self, chunk: torch.Tensor):
+    def __call__(self, chunk: np.array):
         self.curr_window = np.concatenate((chunk, self.curr_window[:-1]))
         return self.curr_window
 
@@ -179,7 +179,7 @@ def run_inference(num_iter=400):
         print(f"Chunk: {chunk}", flush=True)
         segment = cacher(np.expand_dims(np.array(chunk), axis=0)) #shape (T, C) where C is both hands channel count
         #resample segment
-        segment = torch.tensor(interpolate_segment_halves(segment)) #shape (T, 2*C) 2*C should be 32
+        segment = torch.tensor(interpolate_segment_halves(segment), dtype=torch.float32) #shape (T, 2*C) 2*C should be 32
         print(f"segment length {segment.shape}", flush=True)
         print(f"segment {segment}", flush=True) 
         #process chunk and convert to spectrogram
