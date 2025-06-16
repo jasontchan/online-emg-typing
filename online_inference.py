@@ -26,10 +26,10 @@ print(torch.__version__)
 print(torchaudio.__version__)
 
 sample_rate = 200
-segment_length = 200 # this is just window length
+window_length = 3200 # this is just window length
 
 print(f"Sample rate: {sample_rate}")
-print(f"Main segment: {segment_length} frames ({segment_length / sample_rate} seconds)")
+print(f"Main segment: {window_length} frames ({window_length / sample_rate} seconds)")
 
 
 class ContextCacher:
@@ -152,7 +152,7 @@ def interpolate_segment_halves(segment):
 
 
 stream_iterator = emg_generator()
-cacher = ContextCacher(window_length=200)
+cacher = ContextCacher(window_length=window_length)
 
 ckpt_path = "splashlast_125_small.ckpt"
 model_packet = TDSConvCTCModule.load_from_checkpoint(ckpt_path)
@@ -163,6 +163,8 @@ decoder = model_packet.decoder
 
 nBands = 2
 nChannels = 16
+target_rate = 125
+sample_rate = 200
 @torch.inference_mode()
 def run_inference(num_iter=400):
     global hypothesis
@@ -170,8 +172,8 @@ def run_inference(num_iter=400):
     log_spec = NewLogSpectrogram(
             n_fft=64,         
             hop_length=1,
-            sample_rate=200,
-            target_rate=125
+            sample_rate=sample_rate,
+            target_rate=target_rate
         )
 
     for i, (chunk,) in enumerate(stream_iterator, start=1):
@@ -190,9 +192,15 @@ def run_inference(num_iter=400):
         segment = segment.reshape(T, nBands, nChannels, freq_bins)
         segment = segment.unsqueeze(1) #add batch dimension N=1 for online inference
         print(f"segment after reshape {segment.shape}", flush=True)
+
+        window_duration = window_length / sample_rate
+        first_timestamp = time.time() - window_duration
+        timestamps = first_timestamp + np.arange(T) / target_rate
+
+
         logits = model(segment)  # shape (T, C, V) where V is vocab size
         print(f"logits shape {logits.shape}", flush=True)
-        hypothesis = decoder.decode(logits)  # shape (T, C, V) -> (T, C) -> (C,)
+        hypothesis = decoder.decode(logits, timestamps=timestamps)  # shape (T, C, V) -> (T, C) -> (C,)
         print(f"Hypothesis: {hypothesis}", flush=True)
 
         # features, length = feature_extractor(segment)
