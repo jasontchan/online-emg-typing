@@ -99,22 +99,16 @@ class ContextCacher:
     """Cache the end of input data and prepend the next input data with it.
 
     Args:
-        segment_length (int): The size of main segment.
-            If the incoming segment is shorter, then the segment is padded.
-        context_length (int): The size of the context, cached and appended.
+        window_length (int): how big the sliding window is. built-in stride of 1
     """
 
-    def __init__(self, segment_length: int, context_length: int):
-        self.segment_length = segment_length
-        self.context_length = context_length
-        self.context = torch.zeros([context_length])
+    def __init__(self, window_length: int):
+        self.window_length = window_length
+        self.curr_window = torch.zeros([window_length, 16])
 
     def __call__(self, chunk: torch.Tensor):
-        if chunk.size(0) < self.segment_length:
-            chunk = torch.nn.functional.pad(chunk, (0, self.segment_length - chunk.size(0)))
-        chunk_with_context = torch.cat((self.context, chunk))
-        self.context = chunk[-self.context_length :]
-        return chunk_with_context
+        self.curr_window = torch.cat((chunk, self.curr_window[:-1]))
+        return self.curr_window
 
 
 ######################################################################
@@ -210,7 +204,7 @@ def start_connection():
     p_r.start()
 
 
-def emg_generator(num_samples=200):
+def emg_generator():
     """Generator function to yield EMG data from the queue."""
     while True:
         while not q.empty():
@@ -243,18 +237,18 @@ def emg_generator(num_samples=200):
 #     plt.tight_layout()
 
 stream_iterator = emg_generator()
-cacher = ContextCacher(segment_length=200, context_length=199)
+cacher = ContextCacher(window_length=200)
 
 @torch.inference_mode()
-def run_inference(num_iter=100):
+def run_inference(num_iter=400):
     global hypothesis
     for i, (chunk,) in enumerate(stream_iterator, start=1):
         print(f"Processing chunk {i}...", flush=True)
         print(f"Chunk shape: {len(chunk)}", flush=True)
         print(f"Chunk: {chunk}", flush=True)
-        segment = cacher(chunk[:, 0])
-        print(f"Segment shape: {segment.shape}", flush=True)
-        print(f"Segment: {segment}", flush=True)
+        segment = cacher(torch.tensor(chunk).unsqueeze(0))
+        print(f"segment length {segment.shape}", flush=True)
+        print(f"segment {segment}", flush=True)
         # features, length = feature_extractor(segment)
         # hypos, state = decoder.infer(features, length, 10, state=state, hypothesis=hypothesis)
         
@@ -289,7 +283,7 @@ if __name__ == "__main__":
     start_recording()
     print("HERE")
     # Run inference
-    run_inference(100)
+    run_inference(400)
     
     # Clean up processes
     p_l.join()
