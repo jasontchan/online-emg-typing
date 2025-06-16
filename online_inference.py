@@ -22,7 +22,7 @@ print(torch.__version__)
 print(torchaudio.__version__)
 
 # import IPython
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 # from torchaudio.io import StreamReader
 
 ######################################################################
@@ -57,12 +57,10 @@ import matplotlib.pyplot as plt
 #
 
 sample_rate = 200
-segment_length = bundle.segment_length * bundle.hop_length
-context_length = bundle.right_context_length * bundle.hop_length
+segment_length = 200 # this is just window length
 
 print(f"Sample rate: {sample_rate}")
 print(f"Main segment: {segment_length} frames ({segment_length / sample_rate} seconds)")
-print(f"Right context: {context_length} frames ({context_length / sample_rate} seconds)")
 
 ######################################################################
 # 4. Configure the audio stream
@@ -130,8 +128,6 @@ class ContextCacher:
 # decoding state between inference calls.
 #
 
-cacher = ContextCacher(segment_length, context_length)
-
 state, hypothesis = None, None
 
 ######################################################################
@@ -156,7 +152,7 @@ q_r = multiprocessing.Queue()
 q = multiprocessing.Queue() # Queue to combine left and right EMG data
 
 
-def worker(q, mac, tty):
+def worker(raw_q, mac, tty):
     print("MAC", mac, flush=True)
     m = Myo(mode=MODE, tty=tty)
     m.connect(input_address=mac)
@@ -165,7 +161,7 @@ def worker(q, mac, tty):
         curr_time = (time.time(),)
         emg = emg + curr_time
         # print("EMG TUP</LE", emg)
-        q.put(emg)
+        raw_q.put(emg)
 
     m.add_emg_handler(add_to_queue)
 
@@ -215,11 +211,9 @@ def start_connection():
 
 def emg_generator():
     """Generator function to yield EMG data from the queue."""
-    while True:
+    while not q.empty():
         chunk = q.get()
         yield (chunk,)
-
-stream_iterator = emg_generator()
 
 
 #order of operations is
@@ -230,27 +224,31 @@ stream_iterator = emg_generator()
 '''
 
 
-def _plot(feats, num_iter, unit=25):
-    unit_dur = segment_length / sample_rate * unit
-    num_plots = num_iter // unit + (1 if num_iter % unit else 0)
-    fig, axes = plt.subplots(num_plots, 1)
-    t0 = 0
-    for i, ax in enumerate(axes):
-        feats_ = feats[i * unit : (i + 1) * unit]
-        t1 = t0 + segment_length / sample_rate * len(feats_)
-        feats_ = torch.cat([f[2:-2] for f in feats_])  # remove boundary effect and overlap
-        ax.imshow(feats_.T, extent=[t0, t1, 0, 1], aspect="auto", origin="lower")
-        ax.tick_params(which="both", left=False, labelleft=False)
-        ax.set_xlim(t0, t0 + unit_dur)
-        t0 = t1
-    fig.suptitle("MelSpectrogram Feature")
-    plt.tight_layout()
+# def _plot(feats, num_iter, unit=25):
+#     unit_dur = segment_length / sample_rate * unit
+#     num_plots = num_iter // unit + (1 if num_iter % unit else 0)
+#     fig, axes = plt.subplots(num_plots, 1)
+#     t0 = 0
+#     for i, ax in enumerate(axes):
+#         feats_ = feats[i * unit : (i + 1) * unit]
+#         t1 = t0 + segment_length / sample_rate * len(feats_)
+#         feats_ = torch.cat([f[2:-2] for f in feats_])  # remove boundary effect and overlap
+#         ax.imshow(feats_.T, extent=[t0, t1, 0, 1], aspect="auto", origin="lower")
+#         ax.tick_params(which="both", left=False, labelleft=False)
+#         ax.set_xlim(t0, t0 + unit_dur)
+#         t0 = t1
+#     fig.suptitle("MelSpectrogram Feature")
+#     plt.tight_layout()
 
+stream_iterator = emg_generator()
 
 @torch.inference_mode()
 def run_inference(num_iter=100):
     global hypothesis
     for i, (chunk,) in enumerate(stream_iterator, start=1):
+        print(f"Processing chunk {i}...", flush=True)
+        print(f"Chunk shape: {chunk.shape}", flush=True)
+        print(f"Chunk: {chunk}", flush=True)
         # segment = cacher(chunk[:, 0])
         # features, length = feature_extractor(segment)
         # hypos, state = decoder.infer(features, length, 10, state=state, hypothesis=hypothesis)
@@ -263,18 +261,18 @@ def run_inference(num_iter=100):
         process the token, print the character
 
         '''
-        hypothesis = hypos
-        transcript = token_processor(hypos[0][0], lstrip=False)
-        print(transcript, end="\r", flush=True)
+        # hypothesis = hypos
+        # transcript = token_processor(hypos[0][0], lstrip=False)
+        # print(transcript, end="\r", flush=True)
 
-        chunks.append(chunk)
-        feats.append(features)
+        # chunks.append(chunk)
+        # feats.append(features)
         if i == num_iter:
             break
 
     # Plot the features
-    _plot(feats, num_iter)
-    return IPython.display.Audio(torch.cat(chunks).T.numpy(), rate=bundle.sample_rate)
+    # _plot(feats, num_iter)
+    # return IPython.display.Audio(torch.cat(chunks).T.numpy(), rate=bundle.sample_rate)
 
 
 ######################################################################
