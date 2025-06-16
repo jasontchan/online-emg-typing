@@ -15,9 +15,10 @@ need to stream myo data first
 
 import multiprocessing
 import numpy as np
+import emg2qwerty.modules
 import torch
 import torchaudio
-from emg2qwerty import emg2qwerty
+import emg2qwerty
 from scipy.ndimage import zoom
 
 print(torch.__version__)
@@ -153,7 +154,7 @@ stream_iterator = emg_generator()
 cacher = ContextCacher(window_length=200)
 
 ckpt_path = "splashlast_125_small.ckpt"
-model_packet = emg2qwerty.models.TDSConvCTCModule.load_from_checkpoint(ckpt_path)
+model_packet = emg2qwerty.modules.TDSConvCTCModule.load_from_checkpoint(ckpt_path)
 model_packet.eval()
 
 model = model_packet.model 
