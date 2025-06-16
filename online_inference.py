@@ -161,7 +161,8 @@ model_packet.eval()
 model = model_packet.model 
 decoder = model_packet.decoder
 
-
+nBands = 2
+nChannels = 16
 @torch.inference_mode()
 def run_inference(num_iter=400):
     global hypothesis
@@ -185,6 +186,10 @@ def run_inference(num_iter=400):
         #process chunk and convert to spectrogram
         segment = log_spec(segment)
         print(f"segment after log spec {segment.shape}", flush=True)
+        T, total_channels, freq_bins = segment.shape
+        segment = segment.reshape(T, nBands, nChannels, freq_bins)
+        segment = segment.unsqueeze(1) #add batch dimension N=1 for online inference
+        print(f"segment after reshape {segment.shape}", flush=True)
         logits = model(segment)  # shape (T, C, V) where V is vocab size
         print(f"logits shape {logits.shape}", flush=True)
         hypothesis = decoder.decode(logits)  # shape (T, C, V) -> (T, C) -> (C,)
