@@ -18,7 +18,8 @@ import numpy as np
 import emg2qwerty.modules
 import torch
 import torchaudio
-import emg2qwerty
+from emg2qwerty.lightning import TDSConvCTCModule
+from emg2qwerty.transforms import NewLogSpectrogram
 from scipy.ndimage import zoom
 
 print(torch.__version__)
@@ -154,7 +155,7 @@ stream_iterator = emg_generator()
 cacher = ContextCacher(window_length=200)
 
 ckpt_path = "splashlast_125_small.ckpt"
-model_packet = emg2qwerty.modules.TDSConvCTCModule.load_from_checkpoint(ckpt_path)
+model_packet = TDSConvCTCModule.load_from_checkpoint(ckpt_path)
 model_packet.eval()
 
 model = model_packet.model 
@@ -165,7 +166,7 @@ decoder = model_packet.decoder
 def run_inference(num_iter=400):
     global hypothesis
 
-    log_spec = emg2qwerty.transforms.NewLogSpectrogram(
+    log_spec = NewLogSpectrogram(
             n_fft=64,         
             hop_length=1,
             sample_rate=200,
