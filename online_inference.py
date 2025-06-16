@@ -182,11 +182,9 @@ def background_queue_insert(q_l, q_r, q):
             # data_l = ['One', 'Two', 'Three', "Four", "Five", "Six", "Seven", "Eight", "Time"]
             get_q_l = q_l.get()
             get_q_r = q_r.get()
-            print("concatenated left and right", get_q_l[:-1] + get_q_r[:-1])
             q.put(get_q_l[:-1] + get_q_r[:-1])
 
 def start_recording():
-    print("HELLLLLOOOO??")
 
     p_recording = multiprocessing.Process(
                     target=background_queue_insert,
@@ -255,6 +253,8 @@ def run_inference(num_iter=100):
         print(f"Chunk shape: {len(chunk)}", flush=True)
         print(f"Chunk: {chunk}", flush=True)
         segment = cacher(chunk[:, 0])
+        print(f"Segment shape: {segment.shape}", flush=True)
+        print(f"Segment: {segment}", flush=True)
         # features, length = feature_extractor(segment)
         # hypos, state = decoder.infer(features, length, 10, state=state, hypothesis=hypothesis)
         
