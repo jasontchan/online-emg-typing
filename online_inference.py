@@ -16,7 +16,7 @@ need to stream myo data first
 import multiprocessing
 import torch
 import torchaudio
-import emg2qwerty
+# import emg2qwerty
 
 print(torch.__version__)
 print(torchaudio.__version__)
@@ -177,14 +177,17 @@ def worker(raw_q, mac, tty):
 
 #combines left and right emg data
 def background_queue_insert(q_l, q_r, q):
-    while not (q_l.empty() or q_r.empty()):
-        # data_l = ['One', 'Two', 'Three', "Four", "Five", "Six", "Seven", "Eight", "Time"]
-        get_q_l = q_l.get()
-        get_q_r = q_r.get()
-
-        q.put(get_q_l[:-1] + get_q_r[:-1])
+    while True:
+        while not (q_l.empty() or q_r.empty()):
+            # data_l = ['One', 'Two', 'Three', "Four", "Five", "Six", "Seven", "Eight", "Time"]
+            get_q_l = q_l.get()
+            get_q_r = q_r.get()
+            print("concatenated left and right", get_q_l[:-1] + get_q_r[:-1])
+            q.put(get_q_l[:-1] + get_q_r[:-1])
 
 def start_recording():
+    print("HELLLLLOOOO??")
+
     p_recording = multiprocessing.Process(
                     target=background_queue_insert,
                     args=(q_l, q_r, q),
@@ -209,11 +212,12 @@ def start_connection():
     p_r.start()
 
 
-def emg_generator():
+def emg_generator(num_samples=200):
     """Generator function to yield EMG data from the queue."""
-    while not q.empty():
-        chunk = q.get()
-        yield (chunk,)
+    while True:
+        while not q.empty():
+            chunk = q.get()
+            yield (chunk,)
 
 
 #order of operations is
@@ -241,15 +245,16 @@ def emg_generator():
 #     plt.tight_layout()
 
 stream_iterator = emg_generator()
+cacher = ContextCacher(segment_length=200, context_length=199)
 
 @torch.inference_mode()
 def run_inference(num_iter=100):
     global hypothesis
     for i, (chunk,) in enumerate(stream_iterator, start=1):
         print(f"Processing chunk {i}...", flush=True)
-        print(f"Chunk shape: {chunk.shape}", flush=True)
+        print(f"Chunk shape: {len(chunk)}", flush=True)
         print(f"Chunk: {chunk}", flush=True)
-        # segment = cacher(chunk[:, 0])
+        segment = cacher(chunk[:, 0])
         # features, length = feature_extractor(segment)
         # hypos, state = decoder.infer(features, length, 10, state=state, hypothesis=hypothesis)
         
@@ -282,6 +287,7 @@ if __name__ == "__main__":
     start_connection()
     # Start the recording of EMG data
     start_recording()
+    print("HERE")
     # Run inference
     run_inference(100)
     
