@@ -14,85 +14,20 @@ need to stream myo data first
 '''
 
 import multiprocessing
+import numpy as np
 import torch
 import torchaudio
-# import emg2qwerty
+from emg2qwerty import emg2qwerty
+from scipy.ndimage import zoom
 
 print(torch.__version__)
 print(torchaudio.__version__)
-
-# import IPython
-# import matplotlib.pyplot as plt
-# from torchaudio.io import StreamReader
-
-######################################################################
-# 3. Construct the pipeline
-# -------------------------
-#
-# Pre-trained model weights and related pipeline components are
-# bundled as :py:class:`torchaudio.pipelines.RNNTBundle`.
-#
-# We use :py:data:`torchaudio.pipelines.EMFORMER_RNNT_BASE_LIBRISPEECH`,
-# which is a Emformer RNN-T model trained on LibriSpeech dataset.
-#
-
-# bundle = torchaudio.pipelines.EMFORMER_RNNT_BASE_LIBRISPEECH
-
-# feature_extractor = bundle.get_streaming_feature_extractor()
-# decoder = bundle.get_decoder()
-# token_processor = bundle.get_token_processor()
-
-######################################################################
-# Streaming inference works on input data with overlap.
-# Emformer RNN-T model treats the newest portion of the input data
-# as the "right context" — a preview of future context.
-# In each inference call, the model expects the main segment
-# to start from this right context from the previous inference call.
-# The following figure illustrates this.
-#
-# .. image:: https://download.pytorch.org/torchaudio/tutorial-assets/emformer_rnnt_context.png
-#
-# The size of main segment and right context, along with
-# the expected sample rate can be retrieved from bundle.
-#
 
 sample_rate = 200
 segment_length = 200 # this is just window length
 
 print(f"Sample rate: {sample_rate}")
 print(f"Main segment: {segment_length} frames ({segment_length / sample_rate} seconds)")
-
-######################################################################
-# 4. Configure the audio stream
-# -----------------------------
-#
-# Next, we configure the input audio stream using :py:class:`torchaudio.io.StreamReader`.
-#
-# For the detail of this API, please refer to the
-# `StreamReader Basic Usage <./streamreader_basic_tutorial.html>`__.
-#
-
-######################################################################
-# The following audio file was originally published by LibriVox project,
-# and it is in the public domain.
-#
-# https://librivox.org/great-pirate-stories-by-joseph-lewis-french/
-#
-# It was re-uploaded for the sake of the tutorial.
-#
-
-
-######################################################################
-# As previously explained, Emformer RNN-T model expects input data with
-# overlaps; however, `Streamer` iterates the source media without overlap,
-# so we make a helper structure that caches a part of input data from
-# `Streamer` as right context and then appends it to the next input data from
-# `Streamer`.
-#
-# The following figure illustrates this.
-#
-# .. image:: https://download.pytorch.org/torchaudio/tutorial-assets/emformer_rnnt_streamer_context.png
-#
 
 
 class ContextCacher:
@@ -104,33 +39,13 @@ class ContextCacher:
 
     def __init__(self, window_length: int):
         self.window_length = window_length
-        self.curr_window = torch.zeros([window_length, 16])
+        self.curr_window = np.zeros((window_length, 16), dtype=np.float32)
 
     def __call__(self, chunk: torch.Tensor):
-        self.curr_window = torch.cat((chunk, self.curr_window[:-1]))
+        self.curr_window = np.concatenate((chunk, self.curr_window[:-1]))
         return self.curr_window
 
-
-######################################################################
-# 5. Run stream inference
-# -----------------------
-#
-# Finally, we run the recognition.
-#
-# First, we initialize the stream iterator, context cacher, and
-# state and hypothesis that are used by decoder to carry over the
-# decoding state between inference calls.
-#
-
-state, hypothesis = None, None
-
-######################################################################
-# Next we, run the inference.
-#
-# For the sake of better display, we create a helper function which
-# processes the source stream up to the given times and call it
-# repeatedly.
-#
+hypothesis = None
 
 #make my own emg streamer
 import sys
@@ -173,7 +88,6 @@ def worker(raw_q, mac, tty):
 def background_queue_insert(q_l, q_r, q):
     while True:
         while not (q_l.empty() or q_r.empty()):
-            # data_l = ['One', 'Two', 'Three', "Four", "Five", "Six", "Seven", "Eight", "Time"]
             get_q_l = q_l.get()
             get_q_r = q_r.get()
             q.put(get_q_l[:-1] + get_q_r[:-1])
@@ -211,6 +125,21 @@ def emg_generator():
             chunk = q.get()
             yield (chunk,)
 
+def interpolate_segment_halves(segment):
+    """Doubles the channel count by interpolating neighboring channels."""
+    T, C = segment.shape
+    half_channels = C // 2
+
+    left_half = segment[:, :half_channels]
+    right_half = segment[:, half_channels:]
+
+    left_interpolated = zoom(left_half, (1, 2), order=1, mode='wrap')
+    right_interpolated = zoom(right_half, (1, 2), order=1, mode='wrap')
+
+    interpolated_segment = np.concatenate((left_interpolated, right_interpolated), axis=1)
+    return interpolated_segment
+
+
 
 #order of operations is
 '''
@@ -220,35 +149,36 @@ def emg_generator():
 '''
 
 
-# def _plot(feats, num_iter, unit=25):
-#     unit_dur = segment_length / sample_rate * unit
-#     num_plots = num_iter // unit + (1 if num_iter % unit else 0)
-#     fig, axes = plt.subplots(num_plots, 1)
-#     t0 = 0
-#     for i, ax in enumerate(axes):
-#         feats_ = feats[i * unit : (i + 1) * unit]
-#         t1 = t0 + segment_length / sample_rate * len(feats_)
-#         feats_ = torch.cat([f[2:-2] for f in feats_])  # remove boundary effect and overlap
-#         ax.imshow(feats_.T, extent=[t0, t1, 0, 1], aspect="auto", origin="lower")
-#         ax.tick_params(which="both", left=False, labelleft=False)
-#         ax.set_xlim(t0, t0 + unit_dur)
-#         t0 = t1
-#     fig.suptitle("MelSpectrogram Feature")
-#     plt.tight_layout()
-
 stream_iterator = emg_generator()
 cacher = ContextCacher(window_length=200)
 
 @torch.inference_mode()
 def run_inference(num_iter=400):
     global hypothesis
+
+    # log_spec = emg2qwerty.transforms.NewLogSpectrogram(
+        #     n_fft=64,         
+        #     hop_length=1,
+        #     sample_rate=200,
+        #     target_rate=125
+        # )
+
     for i, (chunk,) in enumerate(stream_iterator, start=1):
         print(f"Processing chunk {i}...", flush=True)
         print(f"Chunk shape: {len(chunk)}", flush=True)
         print(f"Chunk: {chunk}", flush=True)
-        segment = cacher(torch.tensor(chunk).unsqueeze(0))
+        segment = cacher(np.expand_dims(np.array(chunk), dim=0)) #shape (T, C) where C is both hands channel count
+        #resample segment
+        segment = interpolate_segment_halves(segment) #shape (T, 2*C) 2*C should be 32
         print(f"segment length {segment.shape}", flush=True)
-        print(f"segment {segment}", flush=True)
+        print(f"segment {segment}", flush=True) 
+        #process chunk and convert to spectrogram
+
+
+        
+
+
+
         # features, length = feature_extractor(segment)
         # hypos, state = decoder.infer(features, length, 10, state=state, hypothesis=hypothesis)
         
@@ -269,12 +199,6 @@ def run_inference(num_iter=400):
         if i == num_iter:
             break
 
-    # Plot the features
-    # _plot(feats, num_iter)
-    # return IPython.display.Audio(torch.cat(chunks).T.numpy(), rate=bundle.sample_rate)
-
-
-######################################################################
 
 if __name__ == "__main__":
     # Start the Myo connection
@@ -293,5 +217,3 @@ if __name__ == "__main__":
 q_l.close()
 q_r.close()
 q.close()  
-
-######################################################################
