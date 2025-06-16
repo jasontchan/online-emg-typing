@@ -199,6 +199,7 @@ def run_inference(num_iter=400):
 
 
         logits = model(segment)  # shape (T, C, V) where V is vocab size
+        logits = logits.squeeze(1)
         print(f"logits shape {logits.shape}", flush=True)
         hypothesis = decoder.decode(logits, timestamps=timestamps)  # shape (T, C, V) -> (T, C) -> (C,)
         print(f"Hypothesis: {hypothesis}", flush=True)
