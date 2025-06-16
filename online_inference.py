@@ -152,32 +152,41 @@ def interpolate_segment_halves(segment):
 stream_iterator = emg_generator()
 cacher = ContextCacher(window_length=200)
 
+ckpt_path = "splashlast_125_small.ckpt"
+model_packet = emg2qwerty.models.TDSConvCTCModule.load_from_checkpoint(ckpt_path)
+model_packet.eval()
+
+model = model_packet.model 
+decoder = model_packet.decoder
+
+
 @torch.inference_mode()
 def run_inference(num_iter=400):
     global hypothesis
 
-    # log_spec = emg2qwerty.transforms.NewLogSpectrogram(
-        #     n_fft=64,         
-        #     hop_length=1,
-        #     sample_rate=200,
-        #     target_rate=125
-        # )
+    log_spec = emg2qwerty.transforms.NewLogSpectrogram(
+            n_fft=64,         
+            hop_length=1,
+            sample_rate=200,
+            target_rate=125
+        )
 
     for i, (chunk,) in enumerate(stream_iterator, start=1):
         print(f"Processing chunk {i}...", flush=True)
         print(f"Chunk shape: {len(chunk)}", flush=True)
         print(f"Chunk: {chunk}", flush=True)
-        segment = cacher(np.expand_dims(np.array(chunk), dim=0)) #shape (T, C) where C is both hands channel count
+        segment = cacher(np.expand_dims(np.array(chunk), axis=0)) #shape (T, C) where C is both hands channel count
         #resample segment
-        segment = interpolate_segment_halves(segment) #shape (T, 2*C) 2*C should be 32
+        segment = torch.tensor(interpolate_segment_halves(segment)) #shape (T, 2*C) 2*C should be 32
         print(f"segment length {segment.shape}", flush=True)
         print(f"segment {segment}", flush=True) 
         #process chunk and convert to spectrogram
-
-
-        
-
-
+        segment = log_spec(segment)
+        print(f"segment after log spec {segment.shape}", flush=True)
+        logits = model(segment)  # shape (T, C, V) where V is vocab size
+        print(f"logits shape {logits.shape}", flush=True)
+        hypothesis = decoder.decode(logits)  # shape (T, C, V) -> (T, C) -> (C,)
+        print(f"Hypothesis: {hypothesis}", flush=True)
 
         # features, length = feature_extractor(segment)
         # hypos, state = decoder.infer(features, length, 10, state=state, hypothesis=hypothesis)
@@ -188,7 +197,6 @@ def run_inference(num_iter=400):
         pass it through emg2qwerty model
         get the hypothesis
         process the token, print the character
-
         '''
         # hypothesis = hypos
         # transcript = token_processor(hypos[0][0], lstrip=False)
@@ -205,7 +213,6 @@ if __name__ == "__main__":
     start_connection()
     # Start the recording of EMG data
     start_recording()
-    print("HERE")
     # Run inference
     run_inference(400)
     
