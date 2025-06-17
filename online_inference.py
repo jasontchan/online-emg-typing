@@ -186,7 +186,10 @@ def run_inference(num_iter=400):
         )
 
     buffer = []
-    stride = 4
+    stride = 10
+    final_output = ""
+    prev_decoded = ""
+
     for i, (chunk,) in enumerate(stream_iterator, start=1):
         # print(f"Processing chunk {i}...", flush=True)
         # print(f"Chunk shape: {len(chunk)}", flush=True)
@@ -217,7 +220,13 @@ def run_inference(num_iter=400):
         timestamps = first_timestamp + np.arange(logits.shape[0]) / target_rate
 
         hypothesis = decoder.decode(logits, timestamps=timestamps)  # shape (T, C, V) -> (T, C) -> (C,)
-        print(f"Hypothesis: {hypothesis}", flush=True)
+
+        new_part = hypothesis[len(prev_decoded):]
+        if new_part:
+            final_output += new_part
+            print("output:", final_output, flush=True)
+        prev_decoded = hypothesis
+        # print(f"Hypothesis: {hypothesis}", flush=True)
 
         if i == num_iter:
             break
