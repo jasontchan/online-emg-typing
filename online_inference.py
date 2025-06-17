@@ -69,8 +69,8 @@ def worker(raw_q, mac, tty):
     m.connect(input_address=mac)
 
     def add_to_queue(emg, movement):
-        curr_time = (time.time(),)
-        emg = emg + curr_time
+        # curr_time = (time.time(),)
+        # emg = emg + curr_time
         # print("EMG TUP</LE", emg)
         raw_q.put(emg)
 
@@ -90,9 +90,17 @@ def worker(raw_q, mac, tty):
 def background_queue_insert(q_l, q_r, q):
     while True:
         while not (q_l.empty() or q_r.empty()):
-            get_q_l = q_l.get()
-            get_q_r = q_r.get()
-            q.put(get_q_l[:-1] + get_q_r[:-1])
+            get_q_l = list(q_l.get())
+            get_q_r = list(q_r.get())
+            
+            #adjust channel orientation to match emg2qwerty
+            get_q_l[0], get_q_l[4] = get_q_l[4], get_q_l[0]
+            get_q_l[1], get_q_l[3] = get_q_l[3], get_q_l[1]
+            get_q_l[7], get_q_l[5] = get_q_l[5], get_q_l[7]
+
+            get_q_r = get_q_r[-2:] + get_q_r[:-2]
+
+            q.put(tuple(get_q_l + get_q_r))
 
 def start_recording():
 
