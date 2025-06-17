@@ -36,7 +36,7 @@ class ContextCacher:
     """Cache the end of input data and prepend the next input data with it.
 
     Args:
-        window_length (int): how big the sliding window is. built-in stride of 1
+        window_length (int): how big the sliding window is. built-in stride of chunk's shape at dim 0.
     """
 
     def __init__(self, window_length: int):
@@ -44,7 +44,8 @@ class ContextCacher:
         self.curr_window = np.zeros((window_length, 16), dtype=np.float32)
 
     def __call__(self, chunk: np.array):
-        self.curr_window = np.concatenate((chunk, self.curr_window[:-1]))
+        self.curr_window = np.concatenate((chunk, self.curr_window[:-chunk.shape[0]]))
+        assert self.curr_window.shape[0] == self.window_length
         return self.curr_window
 
 hypothesis = None
@@ -92,7 +93,7 @@ def background_queue_insert(q_l, q_r, q):
         while not (q_l.empty() or q_r.empty()):
             get_q_l = list(q_l.get())
             get_q_r = list(q_r.get())
-            
+
             #adjust channel orientation to match emg2qwerty
             get_q_l[0], get_q_l[4] = get_q_l[4], get_q_l[0]
             get_q_l[1], get_q_l[3] = get_q_l[3], get_q_l[1]
@@ -184,24 +185,36 @@ def run_inference(num_iter=400):
             target_rate=target_rate
         )
 
+    buffer = []
+    stride = 4
     for i, (chunk,) in enumerate(stream_iterator, start=1):
         # print(f"Processing chunk {i}...", flush=True)
         # print(f"Chunk shape: {len(chunk)}", flush=True)
         # print(f"Chunk: {chunk}", flush=True)
-        segment = cacher(np.expand_dims(np.array(chunk), axis=0)) #shape (T, C) where C is both hands channel count
+        buffer.append(list(chunk))
+        if len(buffer) < stride:
+            continue
+        segment = cacher(np.array(buffer)) #shape (T, C) where C is both hands channel count
+        buffer = []
         #resample segment
         segment = torch.tensor(interpolate_segment_halves(segment), dtype=torch.float32) #shape (T, 2*C) 2*C should be 32
         # print(f"segment length {segment.shape}", flush=True)
         # print(f"segment {segment}", flush=True) 
         #process chunk and convert to spectrogram
+        start = time.time()
         segment = log_spec(segment)
+        log_spec_time = time.time() - start
+        print(f"Log spectrogram took {log_spec_time:.4f} seconds", flush=True)
         # print(f"segment after log spec {segment.shape}", flush=True)
         T, total_channels, freq_bins = segment.shape
         segment = segment.reshape(T, nBands, nChannels, freq_bins)
         segment = segment.unsqueeze(1) #add batch dimension N=1 for online inference
         # print(f"segment after reshape {segment.shape}", flush=True)
 
+        start = time.time()
         logits = model(segment)  # shape (T, C, V) where V is vocab size
+        model_time = time.time() - start
+        print(f"Model inference took {model_time:.4f} seconds", flush=True)
         logits = logits.squeeze(1)
         # print(f"logits shape {logits.shape}", flush=True)
 
@@ -209,7 +222,10 @@ def run_inference(num_iter=400):
         first_timestamp = time.time() - window_duration
         timestamps = first_timestamp + np.arange(logits.shape[0]) / target_rate
 
+        start = time.time()
         hypothesis = decoder.decode(logits, timestamps=timestamps)  # shape (T, C, V) -> (T, C) -> (C,)
+        decode_time = time.time() - start
+        print(f"Decoded in {decode_time:.4f} seconds", flush=True)
         print(f"Hypothesis: {hypothesis}", flush=True)
 
         if i == num_iter:
