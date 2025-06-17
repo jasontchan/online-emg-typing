@@ -97,7 +97,7 @@ def background_queue_insert(q_l, q_r, q):
             #adjust channel orientation to match emg2qwerty
             get_q_l[0], get_q_l[4] = get_q_l[4], get_q_l[0]
             get_q_l[1], get_q_l[3] = get_q_l[3], get_q_l[1]
-            get_q_l[7], get_q_l[5] = get_q_l[5], get_q_l[7]
+            get_q_l[7], get_q_l[6] = get_q_l[6], get_q_l[7]
 
             get_q_r = get_q_r[-2:] + get_q_r[:-2]
 
