@@ -19,14 +19,14 @@ import emg2qwerty.modules
 import torch
 import torchaudio
 from emg2qwerty.lightning import TDSConvCTCModule
-from emg2qwerty.transforms import NewLogSpectrogram
+from emg2qwerty.transforms import LogSpectrogram
 from scipy.ndimage import zoom
 
 print(torch.__version__)
 print(torchaudio.__version__)
 
 sample_rate = 200
-window_length = 3200 # this is just window length
+window_length = 210 # this is just window length
 
 print(f"Sample rate: {sample_rate}")
 print(f"Main segment: {window_length} frames ({window_length / sample_rate} seconds)")
@@ -163,7 +163,7 @@ def interpolate_segment_halves(segment):
 stream_iterator = emg_generator()
 cacher = ContextCacher(window_length=window_length)
 
-ckpt_path = "splashlast_125_small.ckpt"
+ckpt_path = "epoch=143-step=4464.ckpt"
 model_packet = TDSConvCTCModule.load_from_checkpoint(ckpt_path)
 model_packet.eval()
 
@@ -178,7 +178,7 @@ sample_rate = 200
 def run_inference(num_iter=400):
     global hypothesis
 
-    log_spec = NewLogSpectrogram(
+    log_spec = LogSpectrogram(
             n_fft=64,         
             hop_length=1,
             sample_rate=sample_rate,
