@@ -26,7 +26,7 @@ print(torch.__version__)
 print(torchaudio.__version__)
 
 sample_rate = 200
-window_length = 210 # this is just window length
+window_length = 400 # this is just window length
 
 print(f"Sample rate: {sample_rate}")
 print(f"Main segment: {window_length} frames ({window_length / sample_rate} seconds)")
@@ -201,20 +201,14 @@ def run_inference(num_iter=400):
         # print(f"segment length {segment.shape}", flush=True)
         # print(f"segment {segment}", flush=True) 
         #process chunk and convert to spectrogram
-        start = time.time()
         segment = log_spec(segment)
-        log_spec_time = time.time() - start
-        print(f"Log spectrogram took {log_spec_time:.4f} seconds", flush=True)
         # print(f"segment after log spec {segment.shape}", flush=True)
         T, total_channels, freq_bins = segment.shape
         segment = segment.reshape(T, nBands, nChannels, freq_bins)
         segment = segment.unsqueeze(1) #add batch dimension N=1 for online inference
         # print(f"segment after reshape {segment.shape}", flush=True)
 
-        start = time.time()
         logits = model(segment)  # shape (T, C, V) where V is vocab size
-        model_time = time.time() - start
-        print(f"Model inference took {model_time:.4f} seconds", flush=True)
         logits = logits.squeeze(1)
         # print(f"logits shape {logits.shape}", flush=True)
 
@@ -222,10 +216,7 @@ def run_inference(num_iter=400):
         first_timestamp = time.time() - window_duration
         timestamps = first_timestamp + np.arange(logits.shape[0]) / target_rate
 
-        start = time.time()
         hypothesis = decoder.decode(logits, timestamps=timestamps)  # shape (T, C, V) -> (T, C) -> (C,)
-        decode_time = time.time() - start
-        print(f"Decoded in {decode_time:.4f} seconds", flush=True)
         print(f"Hypothesis: {hypothesis}", flush=True)
 
         if i == num_iter:
