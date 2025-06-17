@@ -219,7 +219,7 @@ def run_inference(num_iter=400):
         first_timestamp = time.time() - window_duration
         timestamps = first_timestamp + np.arange(logits.shape[0]) / target_rate
 
-        hypothesis = decoder.decode(logits, timestamps=timestamps)  # shape (T, C, V) -> (T, C) -> (C,)
+        hypothesis = str(decoder.decode(logits, timestamps=timestamps))  # shape (T, C, V) -> (T, C) -> (C,)
 
         new_part = hypothesis[len(prev_decoded):]
         if new_part:
