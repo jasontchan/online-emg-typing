@@ -8,7 +8,7 @@ from collections.abc import Sequence
 
 import torch
 from torch import nn
-import pdb
+
 
 class SpectrogramNorm(nn.Module):
     """A `torch.nn.Module` that applies 2D batch normalization over spectrogram
@@ -102,6 +102,7 @@ class RotationInvariantMLP(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         x = inputs  # (T, N, C, ...)
+
         # Create a new dim for band rotation augmentation with each entry
         # corresponding to the original tensor with its electrode channels
         # shifted by one of ``offsets``:
@@ -151,12 +152,10 @@ class MultiBandRotationInvariantMLP(nn.Module):
         offsets: Sequence[int] = (-1, 0, 1),
         num_bands: int = 2,
         stack_dim: int = 2,
-        share_hand_weights: bool = False,
     ) -> None:
         super().__init__()
         self.num_bands = num_bands
         self.stack_dim = stack_dim
-        self.share_hand_weights = share_hand_weights
 
         # One MLP per band
         self.mlps = nn.ModuleList(
@@ -167,7 +166,7 @@ class MultiBandRotationInvariantMLP(nn.Module):
                     pooling=pooling,
                     offsets=offsets,
                 )
-                for _ in range(num_bands if share_hand_weights == False else 1)
+                for _ in range(num_bands)
             ]
         )
 
@@ -175,18 +174,11 @@ class MultiBandRotationInvariantMLP(nn.Module):
         assert inputs.shape[self.stack_dim] == self.num_bands
 
         inputs_per_band = inputs.unbind(self.stack_dim)
-        if self.share_hand_weights == False:
-            outputs_per_band = [
-                mlp(_input) for mlp, _input in zip(self.mlps, inputs_per_band)
-            ]
-        else:
-            outputs_per_band = [
-                self.mlps[0](_input) for _input in inputs_per_band
-            ]
-
+        outputs_per_band = [
+            mlp(_input) for mlp, _input in zip(self.mlps, inputs_per_band)
+        ]
         return torch.stack(outputs_per_band, dim=self.stack_dim)
 
-    
 
 class TDSConv2dBlock(nn.Module):
     """A 2D temporal convolution block as per "Sequence-to-Sequence Speech
@@ -202,11 +194,10 @@ class TDSConv2dBlock(nn.Module):
         kernel_width (int): The kernel size of the temporal convolution.
     """
 
-    def __init__(self, channels: int, width: int, kernel_width: int, share_hand_weights: bool) -> None:
+    def __init__(self, channels: int, width: int, kernel_width: int) -> None:
         super().__init__()
         self.channels = channels
         self.width = width
-        self.share_hand_weights = share_hand_weights
 
         self.conv2d = nn.Conv2d(
             in_channels=channels,
@@ -214,42 +205,24 @@ class TDSConv2dBlock(nn.Module):
             kernel_size=(1, kernel_width),
         )
         self.relu = nn.ReLU()
-        self.layer_norm = nn.LayerNorm(channels * width // (2 if share_hand_weights else 1))
+        self.layer_norm = nn.LayerNorm(channels * width)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        T_in, N, C = inputs.shape
-        if self.share_hand_weights:
-            # Reshape to process both halves in parallel
-            inputs = inputs.view(T_in, N*2, C//2)  # [T, 2*N, C//2]
+        T_in, N, C = inputs.shape  # TNC
 
-            # T(2N)(C/2) -> (2N)(C/2)T -> (2N)c(w/2)T ### w is half of what it would be without shared weights
-            x = inputs.movedim(0, -1).reshape(N*2, self.channels, self.width//2, T_in)
-            x = self.conv2d(x)
-            x = self.relu(x)
-            x = x.reshape(N*2, C//2, -1).movedim(-1, 0)  # (2N)c(w/2)T -> (2N)(C/2)T -> T(2N)(C/2)
-                
-            # Skip connection afer downsampling 
-            T_out = x.shape[0]
-            x = x + inputs[-T_out:]
-            # Layer norm over C/2
-            x = self.layer_norm(x)
-            
-            return x.view(T_out, N, C)
-        
-        else:
-            # TNC -> NCT -> NcwT
-            x = inputs.movedim(0, -1).reshape(N, self.channels, self.width, T_in)
-            x = self.conv2d(x)
-            x = self.relu(x)
-            x = x.reshape(N, C, -1).movedim(-1, 0)  # NcwT -> NCT -> TNC
+        # TNC -> NCT -> NcwT
+        x = inputs.movedim(0, -1).reshape(N, self.channels, self.width, T_in)
+        x = self.conv2d(x)
+        x = self.relu(x)
+        x = x.reshape(N, C, -1).movedim(-1, 0)  # NcwT -> NCT -> TNC
 
-            # Skip connection after downsampling
-            T_out = x.shape[0]
-            x = x + inputs[-T_out:]
+        # Skip connection after downsampling
+        T_out = x.shape[0]
+        x = x + inputs[-T_out:]
 
-            # Layer norm over C
-            return self.layer_norm(x)  # TNC
-        
+        # Layer norm over C
+        return self.layer_norm(x)  # TNC
+
 
 class TDSFullyConnectedBlock(nn.Module):
     """A fully connected block as per "Sequence-to-Sequence Speech
@@ -259,46 +232,24 @@ class TDSFullyConnectedBlock(nn.Module):
     Args:
         num_features (int): ``num_features`` for an input of shape
             (T, N, num_features).
-        share_hand_weights (bool): whether to share weights across hands
-            and treat each hand independently
     """
-    def __init__(self, num_features: int, share_hand_weights: bool) -> None:
-        super().__init__()
-        self.num_features = num_features
-        self.share_hand_weights = share_hand_weights
 
-        if self.share_hand_weights:
-            half_features = num_features // 2
-            self.fc_block = nn.Sequential(
-                nn.Linear(half_features, half_features),
-                nn.ReLU(),
-                nn.Linear(half_features, half_features)
-            )
-            self.layer_norm = nn.LayerNorm(half_features)
-        else:
-            self.fc_block = nn.Sequential(
-                nn.Linear(num_features, num_features),
-                nn.ReLU(),
-                nn.Linear(num_features, num_features)
-            )
-            self.layer_norm = nn.LayerNorm(num_features)
+    def __init__(self, num_features: int) -> None:
+        super().__init__()
+
+        self.fc_block = nn.Sequential(
+            nn.Linear(num_features, num_features),
+            nn.ReLU(),
+            nn.Linear(num_features, num_features),
+        )
+        self.layer_norm = nn.LayerNorm(num_features)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        if self.share_hand_weights:
-            # Reshape to process both halves in parallel
-            T, N, C = inputs.shape
-            x = inputs.view(T, N*2, C//2)  # [T, 2*N, C//2]
-            
-            # Process both halves simultaneously
-            x = self.fc_block(x) + x  # Residual connection
-            x = self.layer_norm(x)
-            
-            # Restore original shape
-            return x.view(T, N, C)
-        else:
-            x = self.fc_block(inputs)
-            return self.layer_norm(x + inputs)
-        
+        x = inputs  # TNC
+        x = self.fc_block(x)
+        x = x + inputs
+        return self.layer_norm(x)  # TNC
+
 
 class TDSConvEncoder(nn.Module):
     """A time depth-separable convolutional encoder composing a sequence
@@ -319,7 +270,6 @@ class TDSConvEncoder(nn.Module):
         num_features: int,
         block_channels: Sequence[int] = (24, 24, 24, 24),
         kernel_width: int = 32,
-        share_hand_weights: bool = False,
     ) -> None:
         super().__init__()
 
@@ -331,15 +281,14 @@ class TDSConvEncoder(nn.Module):
             ), "block_channels must evenly divide num_features"
             tds_conv_blocks.extend(
                 [
-                    TDSConv2dBlock(channels, num_features // channels, kernel_width, share_hand_weights),
-                    TDSFullyConnectedBlock(num_features, share_hand_weights),
+                    TDSConv2dBlock(channels, num_features // channels, kernel_width),
+                    TDSFullyConnectedBlock(num_features),
                 ]
             )
         self.tds_conv_blocks = nn.Sequential(*tds_conv_blocks)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
-
 
 class RollingTimeNorm(nn.Module):
     r"""Causally normalize a 5D tensor (T, N, bands, channels, freq) along the time axis.

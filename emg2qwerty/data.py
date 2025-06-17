@@ -69,7 +69,6 @@ class EMGSessionData:
     PROMPTS: ClassVar[str] = "prompts"
 
     hdf5_path: Path
-    
 
     def __post_init__(self) -> None:
         self._file = h5py.File(self.hdf5_path, "r")
@@ -211,7 +210,6 @@ class LabelData:
             if not (np.diff(self.timestamps) >= 0).all():
                 self.timestamps.sort()
             assert (np.diff(self.timestamps) >= 0).all(), "Timestamps are not monotonic"
-                
 
     @classmethod
     def from_keystrokes(
@@ -502,8 +500,6 @@ class WindowedEMGDataset(torch.utils.data.Dataset):
 
         # Extract EMG tensor corresponding to the window.
         emg = self.transform(window)
-        has_nan = np.isnan(emg).any()
-        assert not has_nan
         assert torch.is_tensor(emg)
 
         # Extract labels corresponding to the original (un-padded) window.

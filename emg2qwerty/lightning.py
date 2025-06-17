@@ -27,7 +27,6 @@ from emg2qwerty.modules import (
     TDSConvEncoder,
 )
 from emg2qwerty.transforms import Transform
-from pytorch_lightning.utilities.finite_checks import detect_nan_parameters
 
 
 class WindowedEMGDataModule(pl.LightningDataModule):
@@ -77,9 +76,11 @@ class WindowedEMGDataModule(pl.LightningDataModule):
             [
                 WindowedEMGDataset(
                     hdf5_path,
-                    transform=self.val_transform,
-                    window_length=self.window_length,
-                    padding=self.padding,
+                    transform=self.test_transform,
+                    # Feed the entire session at once without windowing/padding
+                    # at test time for more realism
+                    window_length=None,
+                    padding=(0, 0),
                     jitter=False,
                 )
                 for hdf5_path in self.val_sessions
@@ -114,7 +115,7 @@ class WindowedEMGDataModule(pl.LightningDataModule):
     def val_dataloader(self) -> DataLoader:
         return DataLoader(
             self.val_dataset,
-            batch_size=self.batch_size,
+            batch_size=1,
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=WindowedEMGDataset.collate,
@@ -141,7 +142,6 @@ class WindowedEMGDataModule(pl.LightningDataModule):
 class TDSConvCTCModule(pl.LightningModule):
     NUM_BANDS: ClassVar[int] = 2
     ELECTRODE_CHANNELS: ClassVar[int] = 16
-    # share_hand_weights: True
 
     def __init__(
         self,
@@ -149,18 +149,15 @@ class TDSConvCTCModule(pl.LightningModule):
         mlp_features: Sequence[int],
         block_channels: Sequence[int],
         kernel_width: int,
+        spec_norm: str,
         optimizer: DictConfig,
         lr_scheduler: DictConfig,
         decoder: DictConfig,
-        share_hand_weights: bool,
-        spec_norm: str = 'RollingTimeNorm',
-        split_decoding: bool = True,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
 
         num_features = self.NUM_BANDS * mlp_features[-1]
-        # self.share_hand_weights = (not share_hand_weights) or split_decoding
 
         # Model
         # inputs: (T, N, bands=2, electrode_channels=16, freq)
@@ -172,7 +169,6 @@ class TDSConvCTCModule(pl.LightningModule):
                 in_features=in_features,
                 mlp_features=mlp_features,
                 num_bands=self.NUM_BANDS,
-                share_hand_weights=share_hand_weights
             ),
             # (T, N, num_features)
             nn.Flatten(start_dim=2),
@@ -180,7 +176,6 @@ class TDSConvCTCModule(pl.LightningModule):
                 num_features=num_features,
                 block_channels=block_channels,
                 kernel_width=kernel_width,
-                share_hand_weights=share_hand_weights
             ),
             # (T, N, num_classes)
             nn.Linear(num_features, charset().num_classes),
@@ -213,7 +208,7 @@ class TDSConvCTCModule(pl.LightningModule):
         input_lengths = batch["input_lengths"]
         target_lengths = batch["target_lengths"]
         N = len(input_lengths)  # batch_size
-        # print("INPUTS", inputs.shape)
+
         emissions = self.forward(inputs)
 
         # Shrink input lengths by an amount equivalent to the conv encoder's
@@ -222,7 +217,7 @@ class TDSConvCTCModule(pl.LightningModule):
         # such as by striding.
         T_diff = inputs.shape[0] - emissions.shape[0]
         emission_lengths = input_lengths - T_diff
-        
+
         loss = self.ctc_loss(
             log_probs=emissions,  # (T, N, num_classes)
             targets=targets.transpose(0, 1),  # (T, N) -> (N, T)
@@ -230,12 +225,12 @@ class TDSConvCTCModule(pl.LightningModule):
             target_lengths=target_lengths,  # (N,)
         )
 
-
         # Decode emissions
         predictions = self.decoder.decode_batch(
             emissions=emissions.detach().cpu().numpy(),
             emission_lengths=emission_lengths.detach().cpu().numpy(),
         )
+
         # Update metrics
         metrics = self.metrics[f"{phase}_metrics"]
         targets = targets.detach().cpu().numpy()
@@ -277,102 +272,3 @@ class TDSConvCTCModule(pl.LightningModule):
             optimizer_config=self.hparams.optimizer,
             lr_scheduler_config=self.hparams.lr_scheduler,
         )
-
-
-
-
-
-import copy
-class TDSConvCTCFinetuneModule(TDSConvCTCModule):
-    def __init__(self, *args, **kwargs):
-        # Initialize the original model
-        super().__init__(*args, **kwargs)
-
-        # Replace shared hand_processor with separate left/right processors
-        self.left_processor = copy.deepcopy(self.model[:-2])
-        self.right_processor = copy.deepcopy(self.model[:-2])
-        self.shared_part = copy.deepcopy(self.model[-2:])
-
-
-        self.left_processor[0].channels = 16
-        self.right_processor[0].channels = 16
-        #self.left_processor[0].spec_norm = RollingTimeNorm(eps = 0.1)
-        #self.right_processor[0].spec_norm = RollingTimeNorm(eps = 0.1)
-        self.left_processor[1].num_bands = 1
-        self.right_processor[1].num_bands = 1
-
-        for layer_key in self.left_processor[3]._modules['tds_conv_blocks']._modules.keys():
-            self.left_processor[3]._modules['tds_conv_blocks']._modules[layer_key].share_hand_weights = False
-            self.right_processor[3]._modules['tds_conv_blocks']._modules[layer_key].share_hand_weights = False
-            #if int(layer_key) % 2 == 1:
-            #    self.left_processor[3]._modules['tds_conv_blocks']._modules[layer_key].num_features /= 2
-            #    self.right_processor[3]._modules['tds_conv_blocks']._modules[layer_key].num_features /= 2
-            if int(layer_key) % 2 == 0:
-                self.left_processor[3]._modules['tds_conv_blocks']._modules[layer_key].width //= 2
-                self.right_processor[3]._modules['tds_conv_blocks']._modules[layer_key].width //= 2
-
-
-        self.left_processor[1]
-        del self.model  # Remove the original shared module
-
-    def forward(self, input):
-        # Process each hand independently
-        left_input, right_input = torch.split(input,1,2)
-        left_input = torch.repeat_interleave(left_input, 2, dim=3)
-        right_input = torch.repeat_interleave(right_input, 2, dim=3)
-        
-        left_out = self.left_processor(left_input)
-        right_out = self.right_processor(right_input)
-        combined = torch.cat([left_out, right_out], dim=-1)
-        outputs = self.shared_part(combined)  # Keep the original final layer
-        return outputs
-
-    def on_load_checkpoint(self, checkpoint):
-        # Modify checkpoint to map "hand_processor" weights to left/right processors
-        state_dict = checkpoint["state_dict"]
-        new_state_dict = {}
-
-        for key, value in state_dict.items():
-            if key.startswith("model.") and int(key.split('.')[1])<4:
-                print(key)
-                # Copy weights to both left and right processors
-                new_key_left = key.replace("model.", "left_processor.")
-                new_key_right = key.replace("model.", "right_processor.")
-                new_state_dict[new_key_left] = value
-                new_state_dict[new_key_right] = value
-            else:
-                new_key_shared = key.replace("model.", "shared_part.")
-                new_state_dict[new_key_shared] = value
-
-        checkpoint["state_dict"] = new_state_dict
-        
-        # Initialize dict keys and values for BatchNorm2d spec_norm layer
-        if isinstance(self.left_processor[0].spec_norm, nn.BatchNorm1d):
-            #if 'left_processor.0.spec_norm.running_mean' in new_state_dict.keys():
-            #    pass
-            #else:
-            #    pass
-            pass
-            #new_state_dict['left_processor.0.spec_norm.weight'] = torch.ones((16*6))
-            #new_state_dict['left_processor.0.spec_norm.bias'] = torch.zeros((16*6))
-            #new_state_dict['left_processor.0.spec_norm.running_mean'] = torch.zeros((16*6))
-            #new_state_dict['left_processor.0.spec_norm.running_var'] = torch.ones((16*6))
-            #new_state_dict['right_processor.0.spec_norm.weight'] = torch.ones((16*6))
-            #new_state_dict['right_processor.0.spec_norm.bias'] = torch.zeros((16*6))
-            #new_state_dict['right_processor.0.spec_norm.running_mean'] = torch.zeros((16*6))
-            #new_state_dict['right_processor.0.spec_norm.running_var'] = torch.ones((16*6))
-
-
-        #self.load_state_dict(checkpoint["state_dict"])
-        return super().on_load_checkpoint(checkpoint)
-
-
-
-
-
-
-
-
-
-
-

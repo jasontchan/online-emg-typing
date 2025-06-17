@@ -121,10 +121,6 @@ class CTCGreedyDecoder(Decoder):
     ) -> LabelData:
         assert emissions.ndim == 2  # (T, num_classes)
         assert emissions.shape[1] == self._charset.num_classes
-        # print("emissions", emissions.shape)
-        # print("timestamps", timestamps.shape)
-        # print(emissions)
-        # print(timestamps)
         assert len(emissions) == len(timestamps)
 
         for label, timestamp in zip(emissions.argmax(-1), timestamps):
@@ -417,7 +413,7 @@ class CTCBeamDecoder(Decoder):
 
     beam_size: int = 50
     max_labels_per_timestep: int = -1
-    lm_path: str | None = None
+    lm_path: str | None = "/content/drive/MyDrive/emg2qwerty-baseline/emg2qwerty/models/lm/wikitext-103-6gram-charlm.bin"
     lm_weight: float = 2.0
     insertion_bonus: float = 2.0
     delete_key: str | None = "Key.backspace"
