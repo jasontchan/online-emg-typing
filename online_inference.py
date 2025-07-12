@@ -194,11 +194,12 @@ def run_inference(num_iter=400):
         # print(f"Processing chunk {i}...", flush=True)
         # print(f"Chunk shape: {len(chunk)}", flush=True)
         # print(f"Chunk: {chunk}", flush=True)
-        buffer.append(list(chunk))
-        if len(buffer) < stride:
+        chunk = np.array(chunk).reshape(-1, 16)
+        buffer.extend(list(chunk))
+        if len(buffer) < window_length:
             continue
-        segment = cacher(np.array(buffer)) #shape (T, C) where C is both hands channel count
-        buffer = []
+        segment = cacher(np.array(buffer[:window_length])) #shape (T, C) where C is both hands channel count
+        buffer = buffer[stride:]
         #resample segment
         segment = torch.tensor(interpolate_segment_halves(segment), dtype=torch.float32) #shape (T, 2*C) 2*C should be 32
         # print(f"segment length {segment.shape}", flush=True)
